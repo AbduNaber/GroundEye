@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 180" width="600" height="180">
+  <title>GroundEye · Shield Horizontal Lockup</title>
+  <g transform="translate(10,10)">
+    <path d="M 80 20 L 32 42 L 32 96 Q 32 134 80 150 Q 128 134 128 96 L 128 42 Z" fill="none" stroke="#d4a84b" stroke-width="2.4" stroke-linejoin="round"></path>
+    <path d="M 44 92 L 56 92 L 62 72 L 70 112 L 78 64 L 86 120 L 94 76 L 102 102 L 110 92 L 120 92" fill="none" stroke="#d4a84b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+    <circle cx="80" cy="36" r="3" fill="#d4a84b"></circle>
+  </g>
+  <g font-family="&#39;JetBrains Mono&#39;, monospace" fill="#d8e0e6">
+    <text x="170" y="88" font-size="36" font-weight="600" letter-spacing="5">GROUNDEYE</text>
+    <text x="171" y="110" font-size="10" letter-spacing="3.5" fill="#8b96a1">PERIMETER DETECTION SYSTEM</text>
+  </g>
+</svg>

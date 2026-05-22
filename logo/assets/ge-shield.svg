@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180">
+  <title>GroundEye · Perimeter Shield</title>
+  <path d="M 90 28 L 40 48 L 40 102 Q 40 140 90 156 Q 140 140 140 102 L 140 48 Z" fill="none" stroke="#d4a84b" stroke-width="2.4" stroke-linejoin="round"></path>
+  <path d="M 52 98 L 64 98 L 70 78 L 78 118 L 86 70 L 94 126 L 102 82 L 110 108 L 118 98 L 128 98" fill="none" stroke="#d4a84b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+  <circle cx="90" cy="44" r="3" fill="#d4a84b"></circle>
+</svg>

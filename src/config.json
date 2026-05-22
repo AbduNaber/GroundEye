@@ -1,0 +1,26 @@
+{
+  "broker": "10.169.254.204",
+  "port": 1883,
+  "fusion_window_ms": 2000,
+  "min_nodes_for_location": 2,
+  "sqlite_path": "/tmp/groundeye.db",
+  "dist_scale": null,
+  "nodes": [
+    {
+      "id": "node-1",
+      "x": 0.0,
+      "y": 0.0
+    },
+    {
+      "id": "node-2",
+      "x": 3.0,
+      "y": 0.0
+    },
+    {
+      "id": "node-3",
+      "x": 1.5,
+      "y": 2.6
+    }
+  ],
+  "wave_speed_ms": 0.2
+}
