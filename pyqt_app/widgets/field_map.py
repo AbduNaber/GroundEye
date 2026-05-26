@@ -1,12 +1,24 @@
-"""QGraphicsView schematic field map."""
+"""QGraphicsView schematic field map.
+
+Coordinate system
+-----------------
+Physical space : x ∈ [0, 1], y ∈ [0, 1]  (normalised from real metres)
+                 y=0 → bottom of area (node-1/node-2 baseline)
+                 y=1 → top of area   (node-3)
+Screen space   : phys_to_map() adds margin and flips y (screen y grows downward)
+
+Both node pin positions and MQTT location payload x/y live in physical space,
+so applying phys_to_map() to both keeps them consistent.
+"""
 import math
-from PyQt6.QtCore import Qt, QRectF, QPointF, QTimer, pyqtSignal, QObject
+from collections import deque
+from PyQt6.QtCore import Qt, QPointF, QTimer
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QPolygonF
 )
 from PyQt6.QtWidgets import (
-    QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, QGraphicsLineItem,
-    QGraphicsPathItem, QGraphicsTextItem, QGraphicsRectItem, QGraphicsItem,
+    QGraphicsView, QGraphicsScene, QGraphicsEllipseItem,
+    QGraphicsPathItem, QGraphicsTextItem, QGraphicsRectItem,
     QGraphicsItemGroup
 )
 from pyqt_app.services.store import store
@@ -15,6 +27,18 @@ from pyqt_app.services.bus import bus
 
 MAP_W = 1000
 MAP_H = 600
+MARGIN = 0.14  # fraction of MAP dimension reserved as padding on each side
+
+
+def phys_to_map(px: float, py: float) -> tuple[float, float]:
+    """Normalised physical coords → scene pixel coords.
+
+    y is flipped so that physical y=0 (ground baseline) appears at the bottom
+    of the scene and y=1 (apex node) appears at the top.
+    """
+    mx = (MARGIN + px * (1.0 - 2 * MARGIN)) * MAP_W
+    my = (MARGIN + (1.0 - py) * (1.0 - 2 * MARGIN)) * MAP_H
+    return mx, my
 
 
 class NodePinItem(QGraphicsItemGroup):
@@ -26,8 +50,8 @@ class NodePinItem(QGraphicsItemGroup):
         self.parent_view = parent_view
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
-        self._build()
         self._pulse_t = 0.0
+        self._build()
 
     def _build(self):
         for it in list(self.childItems()):
@@ -35,8 +59,7 @@ class NodePinItem(QGraphicsItemGroup):
             if it.scene():
                 it.scene().removeItem(it)
 
-        cx = self.node.x * MAP_W
-        cy = self.node.y * MAP_H
+        cx, cy = phys_to_map(self.node.x, self.node.y)
         color = self._color()
 
         # Detection radius
@@ -45,17 +68,15 @@ class NodePinItem(QGraphicsItemGroup):
         pen = QPen(QColor(color), 1, Qt.PenStyle.DashLine)
         pen.setDashPattern([4, 4])
         self.radius.setPen(pen)
-        fc = QColor(color)
-        fc.setAlpha(14)
+        fc = QColor(color); fc.setAlpha(14)
         self.radius.setBrush(QBrush(fc))
         self.addToGroup(self.radius)
 
-        # Pulse ring (if triggered) — drawn separately by timer
+        # Pulse ring (animated when triggered)
         self.pulse = QGraphicsEllipseItem(cx - 14, cy - 14, 28, 28)
         self.pulse.setPen(QPen(QColor(color), 1.5))
         self.pulse.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-        if self.node.status != "triggered":
-            self.pulse.setVisible(False)
+        self.pulse.setVisible(self.node.status == "triggered")
         self.addToGroup(self.pulse)
 
         # Outer pin
@@ -107,11 +128,9 @@ class NodePinItem(QGraphicsItemGroup):
         t = self._pulse_t
         r = 14 + t * 32
         alpha = int(max(0, 200 * (1 - t)))
-        cx = self.node.x * MAP_W
-        cy = self.node.y * MAP_H
+        cx, cy = phys_to_map(self.node.x, self.node.y)
         self.pulse.setRect(cx - r, cy - r, r * 2, r * 2)
-        col = QColor("#d86a5b")
-        col.setAlpha(alpha)
+        col = QColor("#d86a5b"); col.setAlpha(alpha)
         self.pulse.setPen(QPen(col, 1.5))
 
     def mousePressEvent(self, ev):
@@ -135,7 +154,11 @@ class FieldMap(QGraphicsView):
         self.show_grid = True
         self.show_radii = True
         self.show_paths = True
-        self.pins = {}
+        self.pins: dict = {}
+
+        self._location_history: deque = deque(maxlen=20)
+        self._location_items: list = []
+
         self._rebuild()
 
         self._timer = QTimer(self)
@@ -143,136 +166,99 @@ class FieldMap(QGraphicsView):
         self._timer.start(40)
 
         bus.node_updated.connect(self._on_node_updated)
+        bus.location_received.connect(self._on_location_received)
+        bus.playback_reset.connect(self._on_playback_reset)
 
     def set_option(self, key, value):
         setattr(self, f"show_{key}", value)
         self._rebuild()
 
+    # ------------------------------------------------------------------
+    # Scene construction
+    # ------------------------------------------------------------------
+
     def _rebuild(self):
         self.scene_.clear()
         self.pins = {}
+        self._location_items = []
 
-        # Grid
+        # ── Background grid ─────────────────────────────────────────────
         if self.show_grid:
-            pen_minor = QPen(QColor(255, 255, 255, 18), 0.5)
+            pen_minor = QPen(QColor(255, 255, 255, 14), 0.5)
             for x in range(0, MAP_W + 1, 40):
                 self.scene_.addLine(x, 0, x, MAP_H, pen_minor)
             for y in range(0, MAP_H + 1, 40):
                 self.scene_.addLine(0, y, MAP_W, y, pen_minor)
-            pen_major = QPen(QColor(255, 255, 255, 34), 0.5)
+            pen_major = QPen(QColor(255, 255, 255, 28), 0.5)
             for x in range(0, MAP_W + 1, 200):
                 self.scene_.addLine(x, 0, x, MAP_H, pen_major)
             for y in range(0, MAP_H + 1, 200):
                 self.scene_.addLine(0, y, MAP_W, y, pen_major)
 
-        # Crosshairs
-        pen_xh = QPen(QColor(255, 255, 255, 40), 0.5, Qt.PenStyle.DashLine)
-        pen_xh.setDashPattern([2, 4])
-        self.scene_.addLine(MAP_W / 2, 0, MAP_W / 2, MAP_H, pen_xh)
-        self.scene_.addLine(0, MAP_H / 2, MAP_W, MAP_H / 2, pen_xh)
+        # ── Hub (RPi5 / broker) — below the node triangle ───────────────
+        hub_x = MAP_W / 2
+        hub_y = MAP_H * 0.93
 
-        # Terrain contours
-        pen_con = QPen(QColor(255, 255, 255, 16), 1)
-        for (cx, cy, rx, ry) in [(300, 250, 180, 90), (300, 250, 240, 130),
-                                  (680, 380, 200, 110), (680, 380, 280, 160)]:
-            item = self.scene_.addEllipse(cx - rx, cy - ry, rx * 2, ry * 2, pen_con)
-            item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        # ── TDOA triangulation lines between nodes ───────────────────────
+        node_pts = {n.id: phys_to_map(n.x, n.y) for n in store.nodes}
+        ids = [n.id for n in store.nodes]
+        pen_tri = QPen(QColor(255, 255, 255, 22), 1, Qt.PenStyle.DashLine)
+        pen_tri.setDashPattern([5, 5])
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                ax, ay = node_pts[ids[i]]
+                bx, by = node_pts[ids[j]]
+                self.scene_.addLine(ax, ay, bx, by, pen_tri)
+                # Distance label at midpoint
+                mx, my = (ax + bx) / 2, (ay + by) / 2
+                # compute physical distance in metres
+                na = store.node(ids[i])
+                nb = store.node(ids[j])
+                if na and nb:
+                    from pyqt_app.services.store import PHYS_W_M, PHYS_H_M
+                    dm = math.hypot(
+                        (na.x - nb.x) * PHYS_W_M,
+                        (na.y - nb.y) * PHYS_H_M,
+                    )
+                    t = self.scene_.addText(f"{dm:.1f}m", QFont("JetBrains Mono", 7))
+                    t.setDefaultTextColor(QColor(255, 255, 255, 60))
+                    br = t.boundingRect()
+                    t.setPos(mx - br.width() / 2, my - br.height() / 2)
 
-        # Site boundary
-        pen_b = QPen(QColor(255, 255, 255, 56), 1, Qt.PenStyle.DashLine)
-        pen_b.setDashPattern([6, 6])
-        self.scene_.addRect(60, 60, 880, 480, pen_b, QBrush(Qt.BrushStyle.NoBrush))
-        t = self.scene_.addText("SITE-A PERIMETER · 120×72m",
-                                 QFont("JetBrains Mono", 7))
-        t.setDefaultTextColor(QColor(255, 255, 255, 90))
-        t.setPos(66, 62)
-
-        # Hub
-        hub_x = 500
-        hub_y = MAP_H * 0.92
-
-        # Connection lines node → hub
+        # ── Node → hub MQTT connection lines ────────────────────────────
         for n in store.nodes:
-            x = n.x * MAP_W
-            y = n.y * MAP_H
+            nx, ny = phys_to_map(n.x, n.y)
             col = (
                 "#d86a5b" if n.status == "triggered"
                 else "#5c6771" if n.status == "offline"
                 else "#5a9fb8" if n.status == "connecting"
                 else "#d4a84b"
             )
-            c = QColor(col)
-            c.setAlpha(90 if n.status == "offline" else 110)
+            c = QColor(col); c.setAlpha(90 if n.status == "offline" else 110)
             pen = QPen(c, 1)
             if n.status == "offline":
-                pen.setStyle(Qt.PenStyle.DashLine)
-                pen.setDashPattern([2, 5])
+                pen.setStyle(Qt.PenStyle.DashLine); pen.setDashPattern([2, 5])
             elif n.status == "connecting":
-                pen.setStyle(Qt.PenStyle.DashLine)
-                pen.setDashPattern([4, 3])
-            self.scene_.addLine(x, y, hub_x, hub_y, pen)
+                pen.setStyle(Qt.PenStyle.DashLine); pen.setDashPattern([4, 3])
+            self.scene_.addLine(nx, ny, hub_x, hub_y, pen)
 
             # MQTT mid-label
-            mx = (x + hub_x) / 2
-            my = (y + hub_y) / 2
-            r = self.scene_.addRect(mx - 20, my - 7, 40, 14,
-                                    QPen(QColor("#242c34"), 0.5),
-                                    QBrush(QColor("#0f1317")))
+            mx, my = (nx + hub_x) / 2, (ny + hub_y) / 2
+            self.scene_.addRect(mx - 20, my - 7, 40, 14,
+                                 QPen(QColor("#242c34"), 0.5),
+                                 QBrush(QColor("#0f1317")))
             tt = self.scene_.addText("MQTT", QFont("JetBrains Mono", 7))
             tt.setDefaultTextColor(QColor(255, 255, 255, 120))
             br = tt.boundingRect()
             tt.setPos(mx - br.width() / 2, my - br.height() / 2)
 
-        # Detection radii (drawn as part of pin)
-
-        # Path trails
-        if self.show_paths:
-            for p in store.paths:
-                pts = []
-                for (nid, _ts) in p["hits"]:
-                    node = store.node(nid)
-                    if node:
-                        pts.append(QPointF(node.x * MAP_W, node.y * MAP_H))
-                if len(pts) < 2:
-                    continue
-                path = QPainterPath(pts[0])
-                for q in pts[1:]:
-                    path.lineTo(q)
-                pen = QPen(QColor("#d4a84b"), 1.5, Qt.PenStyle.DashLine)
-                pen.setDashPattern([6, 3])
-                item = QGraphicsPathItem(path)
-                item.setPen(pen)
-                self.scene_.addItem(item)
-                for q in pts:
-                    dot = self.scene_.addEllipse(q.x() - 3, q.y() - 3, 6, 6,
-                                                  QPen(Qt.PenStyle.NoPen),
-                                                  QBrush(QColor("#d4a84b")))
-                # Arrowhead at last point
-                if len(pts) >= 2:
-                    a = pts[-2]
-                    b = pts[-1]
-                    ang = math.atan2(b.y() - a.y(), b.x() - a.x())
-                    arrow = QPolygonF([
-                        b,
-                        QPointF(b.x() - 8 * math.cos(ang - 0.4),
-                                b.y() - 8 * math.sin(ang - 0.4)),
-                        QPointF(b.x() - 8 * math.cos(ang + 0.4),
-                                b.y() - 8 * math.sin(ang + 0.4)),
-                    ])
-                    self.scene_.addPolygon(arrow, QPen(Qt.PenStyle.NoPen),
-                                           QBrush(QColor("#d4a84b")))
-                # Label
-                lab = self.scene_.addText(p["label"], QFont("JetBrains Mono", 8))
-                lab.setDefaultTextColor(QColor("#d4a84b"))
-                lab.setPos(pts[0].x() - 40, pts[0].y() - 24)
-
-        # Nodes
+        # ── Node pins ───────────────────────────────────────────────────
         for n in store.nodes:
             pin = NodePinItem(n, self)
             self.scene_.addItem(pin)
             self.pins[n.id] = pin
 
-        # Hub device
+        # ── Hub device ──────────────────────────────────────────────────
         self.scene_.addRect(hub_x - 22, hub_y - 14, 44, 28,
                             QPen(QColor("#8b96a1"), 1.2),
                             QBrush(QColor("#0f1317")))
@@ -291,7 +277,10 @@ class FieldMap(QGraphicsView):
                                QPen(Qt.PenStyle.NoPen),
                                QBrush(QColor("#6fb56a")))
 
-        # Compass
+        # ── MQTT location overlay (re-drawn after every rebuild) ─────────
+        self._update_location_display()
+
+        # ── Compass ─────────────────────────────────────────────────────
         self.scene_.addEllipse(908, 38, 44, 44,
                                QPen(QColor("#2e3842"), 1),
                                QBrush(QColor("#0f1317")))
@@ -303,18 +292,18 @@ class FieldMap(QGraphicsView):
             t.setDefaultTextColor(QColor(c))
             br = t.boundingRect()
             t.setPos(930 - br.width() / 2 + dx, 60 - br.height() / 2 + dy)
-        needle = QPolygonF([
-            QPointF(930, 46),
-            QPointF(933, 60),
-            QPointF(930, 64),
-            QPointF(927, 60),
-        ])
+        needle = QPolygonF([QPointF(930, 46), QPointF(933, 60),
+                            QPointF(930, 64), QPointF(927, 60)])
         self.scene_.addPolygon(needle, QPen(Qt.PenStyle.NoPen),
                                QBrush(QColor("#d4a84b")))
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self.fitInView(self.scene_.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    # ------------------------------------------------------------------
+    # Animation + updates
+    # ------------------------------------------------------------------
 
     def _animate(self):
         for pin in self.pins.values():
@@ -325,3 +314,104 @@ class FieldMap(QGraphicsView):
         if pin:
             pin.node = node
             pin.refresh()
+
+    def _on_playback_reset(self) -> None:
+        self._location_history.clear()
+        self._update_location_display()
+
+    def _on_location_received(self, payload: dict) -> None:
+        self._location_history.append(payload)
+        self._update_location_display()
+
+    def _update_location_display(self) -> None:
+        """Redraw MQTT location overlay without full scene rebuild."""
+        for item in self._location_items:
+            if item.scene():
+                self.scene_.removeItem(item)
+        self._location_items.clear()
+
+        if not self._location_history:
+            return
+
+        from pyqt_app.services.store import PHYS_W_M, PHYS_H_M
+
+        def _norm(px: float, py: float) -> tuple[float, float]:
+            return phys_to_map(
+                max(0.0, min(1.0, px / PHYS_W_M)),
+                max(0.0, min(1.0, py / PHYS_H_M)),
+            )
+
+        # ── Path trail (last 20 best positions) ─────────────────────────
+        best_pts = [
+            QPointF(*_norm(p["x"], p["y"]))
+            for p in self._location_history
+        ]
+        if len(best_pts) >= 2:
+            path = QPainterPath(best_pts[0])
+            for pt in best_pts[1:]:
+                path.lineTo(pt)
+            pen = QPen(QColor(180, 180, 180, 80), 1, Qt.PenStyle.DashLine)
+            pen.setDashPattern([3, 4])
+            item = QGraphicsPathItem(path)
+            item.setPen(pen)
+            self.scene_.addItem(item)
+            self._location_items.append(item)
+            for pt in best_pts[:-1]:
+                d = self.scene_.addEllipse(
+                    pt.x() - 2, pt.y() - 2, 4, 4,
+                    QPen(Qt.PenStyle.NoPen),
+                    QBrush(QColor(180, 180, 180, 60)),
+                )
+                self._location_items.append(d)
+
+        latest = self._location_history[-1]
+        best_method = latest.get("best_method", "amplitude")
+
+        # ── Amplitude dot (blue) ─────────────────────────────────────────
+        amp = latest.get("amplitude", {})
+        if amp:
+            ax, ay = _norm(amp.get("x", 0), amp.get("y", 0))
+            r = 9 if best_method == "amplitude" else 5
+            pen = QPen(QColor("#4a9eff"), 1.5)
+            col = QColor("#4a9eff"); col.setAlpha(100)
+            item = self.scene_.addEllipse(ax - r, ay - r, r * 2, r * 2, pen, QBrush(col))
+            self._location_items.append(item)
+            if best_method == "amplitude":
+                t = self.scene_.addText("AMP", QFont("JetBrains Mono", 7))
+                t.setDefaultTextColor(QColor("#4a9eff"))
+                t.setPos(ax + r + 2, ay - 8)
+                self._location_items.append(t)
+
+        # ── TDOA dot (red) ───────────────────────────────────────────────
+        if latest.get("tdoa_used") and "tdoa" in latest:
+            tdoa = latest["tdoa"]
+            tx, ty = _norm(tdoa.get("x", 0), tdoa.get("y", 0))
+            r = 9 if best_method == "tdoa" else 5
+            pen = QPen(QColor("#d86a5b"), 1.5)
+            col = QColor("#d86a5b"); col.setAlpha(100)
+            item = self.scene_.addEllipse(tx - r, ty - r, r * 2, r * 2, pen, QBrush(col))
+            self._location_items.append(item)
+            if best_method == "tdoa":
+                t = self.scene_.addText("TDOA", QFont("JetBrains Mono", 7))
+                t.setDefaultTextColor(QColor("#d86a5b"))
+                t.setPos(tx + r + 2, ty - 8)
+                self._location_items.append(t)
+
+        # ── Best position ring ───────────────────────────────────────────
+        bx, by = _norm(latest["x"], latest["y"])
+        ring_col = "#d86a5b" if best_method == "tdoa" else "#4a9eff"
+        r = 14
+        pen = QPen(QColor(ring_col), 2)
+        col = QColor(ring_col); col.setAlpha(30)
+        item = self.scene_.addEllipse(bx - r, by - r, r * 2, r * 2, pen, QBrush(col))
+        self._location_items.append(item)
+
+        conf = latest.get("confidence", 0)
+        dist = latest.get("est_dist_m", 0)
+        t = self.scene_.addText(
+            f"{best_method.upper()}  {conf:.0%}  {dist:.1f}m",
+            QFont("JetBrains Mono", 7),
+        )
+        t.setDefaultTextColor(QColor(ring_col))
+        t.setPos(bx + r + 4, by - 8)
+        self._location_items.append(t)

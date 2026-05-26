@@ -3,23 +3,36 @@ from typing import List, Optional
 from pyqt_app.models.node import Node
 from pyqt_app.models.event import Event, make_waveform
 
+# Maps MQTT node IDs → store node IDs
+MQTT_NODE_MAP: dict[str, str] = {
+    "node-1": "N01",
+    "node-2": "N02",
+    "node-3": "N03",
+}
+
+# Physical field dimensions in metres (matches C++ orchestration config)
+# node-1: (0, 0)  node-2: (3, 0)  node-3: (1.5, 2.6)
+PHYS_W_M: float = 3.0    # x span in metres
+PHYS_H_M: float = 2.6    # y span in metres
+
 
 def _seed_nodes() -> List[Node]:
     return [
-        Node(id="N01", name="NODE-01", label="North Perimeter",
-             x=0.22, y=0.32, lat=40.81236, lon=29.35912,
-             status="online", rssi=4, battery=0.86, temp=12.4,
-             threshold=0.38, signal=0.12, last_trigger="14:22:07",
+        # x/y = physical normalised coords: node-1(0,0) node-2(1,0) node-3(0.5,1)
+        Node(id="N01", name="NODE-01", label="node-1",
+             x=0.0, y=0.0, lat=40.81236, lon=29.35912,
+             status="offline", rssi=0, battery=0.86, temp=12.4,
+             threshold=0.38, signal=0.0, last_trigger="—",
              mac="34:85:18:AA:12:01"),
-        Node(id="N02", name="NODE-02", label="East Gate",
-             x=0.58, y=0.44, lat=40.81194, lon=29.35978,
-             status="triggered", rssi=4, battery=0.72, temp=13.1,
-             threshold=0.38, signal=0.81, last_trigger="14:31:52",
+        Node(id="N02", name="NODE-02", label="node-2",
+             x=1.0, y=0.0, lat=40.81194, lon=29.35978,
+             status="offline", rssi=0, battery=0.72, temp=13.1,
+             threshold=0.38, signal=0.0, last_trigger="—",
              mac="34:85:18:AA:12:02"),
-        Node(id="N03", name="NODE-03", label="South Ridge",
-             x=0.78, y=0.72, lat=40.81144, lon=29.36024,
-             status="online", rssi=3, battery=0.44, temp=11.8,
-             threshold=0.38, signal=0.22, last_trigger="13:58:11",
+        Node(id="N03", name="NODE-03", label="node-3",
+             x=0.5, y=1.0, lat=40.81144, lon=29.36024,
+             status="offline", rssi=0, battery=0.44, temp=11.8,
+             threshold=0.38, signal=0.0, last_trigger="—",
              mac="34:85:18:AA:12:03"),
     ]
 
@@ -55,12 +68,8 @@ def _seed_events() -> List[Event]:
 class Store:
     def __init__(self):
         self.nodes: List[Node] = _seed_nodes()
-        self.events: List[Event] = _seed_events()
-        self.paths = [
-            {"id": "PATH-14", "label": "Track 14",
-             "hits": [("N01", "14:22:07"), ("N02", "14:28:14"), ("N02", "14:31:52")],
-             "active": True},
-        ]
+        self.events: List[Event] = []
+        self.paths: List[dict] = []
 
     def node(self, nid: str) -> Optional[Node]:
         return next((n for n in self.nodes if n.id == nid), None)
@@ -75,6 +84,15 @@ class Store:
         e = self.event(eid)
         if e:
             e.ack = True
+
+    def node_by_mqtt_id(self, mqtt_id: str) -> Optional[Node]:
+        nid = MQTT_NODE_MAP.get(mqtt_id)
+        return self.node(nid) if nid else None
+
+    def add_event(self, ev: Event) -> None:
+        self.events.insert(0, ev)
+        if len(self.events) > 200:
+            self.events = self.events[:200]
 
 
 store = Store()

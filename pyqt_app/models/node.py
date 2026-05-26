@@ -22,3 +22,4 @@ class Node:
     mac: str = "00:00:00:00:00:00"
     connected: str = "2026-04-17 09:02"
     detection_radius: int = 10
+    rssi_dbm: int = -60       # raw dBm value from groundeye/status

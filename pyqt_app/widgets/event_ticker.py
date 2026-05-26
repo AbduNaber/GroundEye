@@ -8,7 +8,7 @@ from pyqt_app.services.bus import bus
 
 
 class TickerRow(QFrame):
-    def __init__(self, event, node, parent=None):
+    def __init__(self, event, node, live: bool = False, parent=None):
         super().__init__(parent)
         self.event = event
         self.setProperty("role", "tickerItem")
@@ -20,8 +20,11 @@ class TickerRow(QFrame):
 
         sev = QFrame()
         sev.setFixedSize(3, 28)
+        # TDOA events get a distinct teal accent; live rows are slightly brighter
+        is_tdoa = event.tag == "tdoa"
         color = (
-            "#d86a5b" if event.severity == "high"
+            "#5a9fb8" if is_tdoa
+            else "#d86a5b" if event.severity == "high"
             else "#5a9fb8" if event.severity == "info"
             else "#d4a84b"
         )
@@ -34,13 +37,18 @@ class TickerRow(QFrame):
 
         col = QVBoxLayout()
         col.setSpacing(2)
-        title = QLabel(f"{event.node_id} · {node.label if node else ''}")
+        node_label = node.label if node else ""
+        title = QLabel(f"{event.node_id} · {node_label}")
         title.setProperty("role", "tickerTitle")
         if event.ack:
             title.setStyleSheet("color: #8b96a1;")
+        elif live:
+            title.setStyleSheet(f"color: {color};")
         col.addWidget(title)
+
+        method_tag = f"[{event.tag.upper()}]  " if event.tag else ""
         meta = QLabel(
-            f"amp {event.amplitude:.2f} · {event.duration:.2f}s · {event.distance:.1f}m"
+            f"{method_tag}conf {event.amplitude:.2f} · {event.distance:.1f}m"
             f"{' · ACK' if event.ack else ''}"
         )
         meta.setProperty("role", "tickerMeta")
@@ -71,7 +79,6 @@ class EventTicker(QScrollArea):
         self.populate(events)
 
     def populate(self, events):
-        # Clear
         while self._lay.count() > 1:
             item = self._lay.takeAt(0)
             w = item.widget()
@@ -81,3 +88,19 @@ class EventTicker(QScrollArea):
             node = self.store.node(ev.node_id)
             row = TickerRow(ev, node)
             self._lay.insertWidget(self._lay.count() - 1, row)
+
+    def prepend_event(self, ev) -> None:
+        """Insert a live MQTT event at the top; keep at most 8 rows."""
+        node = self.store.node(ev.node_id)
+        row = TickerRow(ev, node, live=True)
+        self._lay.insertWidget(0, row)
+        # Trim to 8 visible rows (index 0..7, stretch is last)
+        while self._lay.count() > 9:
+            item = self._lay.takeAt(self._lay.count() - 2)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        # Scroll to top so new event is visible
+        vsb = self.verticalScrollBar()
+        if vsb:
+            vsb.setValue(0)

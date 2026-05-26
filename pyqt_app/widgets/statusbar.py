@@ -21,7 +21,7 @@ class StatusBar(QFrame):
             lay.addWidget(w)
 
         lay.addStretch(1)
-        right = self._mk("cse496 · groundeye v0.4.2 · build 2026.04.18")
+        right = self._mk("groundeye v0.4.2 · build 2026.04.18")
         lay.addWidget(right)
 
         self.refresh()

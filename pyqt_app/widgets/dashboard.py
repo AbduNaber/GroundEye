@@ -90,6 +90,10 @@ class Dashboard(QWidget):
         lay.addWidget(strip_panel, 1, 0, 1, 2)
 
         bus.node_selected.connect(self._on_select)
+        bus.event_received.connect(self._on_live_event)
+
+    def _on_live_event(self, ev) -> None:
+        self.ticker.prepend_event(ev)
 
     def _toggle(self, btn, key):
         active = btn.property("active") != "true"

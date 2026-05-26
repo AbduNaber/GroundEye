@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 from pyqt_app.themes.palette import qss
 from pyqt_app.services.bus import bus
 from pyqt_app.services.store import store
-from pyqt_app.services import mock_stream
+from pyqt_app.services import mqtt_client
 from pyqt_app.widgets.titlebar import TitleBar
 from pyqt_app.widgets.tabs import TabsBar
 from pyqt_app.widgets.statusbar import StatusBar
@@ -17,6 +17,7 @@ from pyqt_app.widgets.dashboard import Dashboard
 from pyqt_app.widgets.events_table import EventsTab
 from pyqt_app.widgets.signals_view import SignalsTab
 from pyqt_app.widgets.gallery import GalleryTab
+from pyqt_app.widgets.recordings_tab import RecordingsTab
 from pyqt_app.widgets.event_dialog import EventDialog
 from pyqt_app.widgets.toast import ToastManager
 
@@ -35,7 +36,7 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(root); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
 
         lay.addWidget(TitleBar())
-        self.tabs = TabsBar(["DASHBOARD", "EVENTS", "SIGNALS", "GALLERY"])
+        self.tabs = TabsBar(["DASHBOARD", "EVENTS", "SIGNALS", "GALLERY", "RECORDINGS"])
         lay.addWidget(self.tabs)
 
         self.stack = QStackedWidget()
@@ -43,6 +44,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(EventsTab())
         self.stack.addWidget(SignalsTab())
         self.stack.addWidget(GalleryTab())
+        self.stack.addWidget(RecordingsTab())
         lay.addWidget(self.stack, 1)
 
         lay.addWidget(StatusBar())
@@ -93,7 +95,7 @@ def main():
     _app.setStyleSheet(qss("dark"))
     win = MainWindow()
     win.show()
-    mock_stream.start()
+    mqtt_client.start()
     sys.exit(_app.exec())
 
 

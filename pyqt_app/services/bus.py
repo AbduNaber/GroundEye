@@ -12,5 +12,17 @@ class Bus(QObject):
     event_acked = pyqtSignal(str)             # event_id
     toast = pyqtSignal(str, str, str, str)    # kind, title, body, meta
 
+    # MQTT signals
+    location_received = pyqtSignal(dict)      # groundeye/location payload
+    status_received = pyqtSignal(dict)        # groundeye/status payload
+    mqtt_event_received = pyqtSignal(dict)    # groundeye/event payload
+    mqtt_connected = pyqtSignal(str, int)     # host, port
+    mqtt_disconnected = pyqtSignal()
+
+    # Recorder / player signals
+    recording_started = pyqtSignal(str)       # filepath
+    recording_stopped = pyqtSignal(str, int)  # filepath, count
+    playback_reset = pyqtSignal()             # clear transient state before replay
+
 
 bus = Bus()

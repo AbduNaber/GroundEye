@@ -67,7 +67,7 @@ class NodeCard(QFrame):
         link_w = QWidget()
         link_w.setLayout(link_row)
         grid.addWidget(link_w, 1, 1)
-        self.link_val = QLabel("--" if node.status == "offline" else "-64 dBm")
+        self.link_val = QLabel("--" if node.status == "offline" else f"{node.rssi_dbm} dBm")
         self.link_val.setProperty("role", "monoSmall")
         self.link_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.link_val.setFixedWidth(60)
@@ -130,6 +130,10 @@ class NodeCard(QFrame):
         self.signal_bar.set_color("#d86a5b" if node.status == "triggered" else "#d4a84b")
         self.signal_val.setText(f"{node.signal:.2f}")
         self.rssi.set_level(node.rssi)
+        if node.status == "offline":
+            self.link_val.setText("--")
+        else:
+            self.link_val.setText(f"{node.rssi_dbm} dBm")
         self._refresh_status()
 
     def mousePressEvent(self, ev):

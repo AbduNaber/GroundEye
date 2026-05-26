@@ -1,0 +1,2 @@
+{"ts_ms": 0, "topic": "groundeye/location", "payload": {"x": 0.5, "y": 0.5, "confidence": 0.8, "best_method": "tdoa", "tdoa_used": true, "est_dist_m": 1.2, "nearest_node": "node-1", "nodes": [], "amplitude": {"x": 0.48, "y": 0.48}, "tdoa": {"x": 0.5, "y": 0.5}}}
+{"ts_ms": 0, "topic": "groundeye/status", "payload": {"node_id": "node-1", "status": "online", "rssi": -55}}

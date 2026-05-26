@@ -1,5 +1,5 @@
 {
-  "broker": "10.169.254.204",
+  "broker": "localhost",
   "port": 1883,
   "fusion_window_ms": 2000,
   "min_nodes_for_location": 2,
