@@ -14,7 +14,7 @@
 //    ./groundeye_dsp --broker localhost --nodes node-1,node-2,node-3
 // ============================================================
 
-#include "dsp.hpp"
+#include "DSP.hpp"
 
 #include <mosquitto.h>
 #include <nlohmann/json.hpp>
@@ -23,6 +23,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -41,7 +42,65 @@ struct Config {
     std::string event_topic = "groundeye/event";
     std::vector<std::string> nodes = {"node-1"};
     bool        verbose     = false;
+    std::string config_path = "";   // boş = config dosyası yükleme
+
+    // Tüm node'lara uygulanan detection parametreleri.
+    // config.json "detection" bloğundan yüklenir — recompile gerekmez.
+    groundeye::DetectorParams detector;
 };
+
+// ── config.json'dan detection parametrelerini yükle ──────────
+// Beklenen yapı (hepsi opsiyonel, eksikler default kalır):
+//   { "broker": "...", "port": 1883, "nodes": ["node-1", ...],
+//     "event_topic": "...",
+//     "detection": {
+//       "fs": 2000, "sta_s": 0.1, "lta_s": 1.0,
+//       "trigger_on": 2.0, "trigger_off": 1.3,
+//       "env_window_s": 0.05, "min_duration_ms": 80,
+//       "min_peak_amp": 0.0 } }
+void loadConfigFile(Config& cfg, const std::string& path) {
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        std::cerr << "[CONFIG] Açılamadı, defaultlar kullanılıyor: "
+                  << path << "\n";
+        return;
+    }
+    try {
+        json j = json::parse(f);
+
+        cfg.broker      = j.value("broker",      cfg.broker);
+        cfg.port        = j.value("port",        cfg.port);
+        cfg.event_topic = j.value("event_topic", cfg.event_topic);
+
+        if (j.contains("nodes") && j["nodes"].is_array() &&
+            !j["nodes"].empty()) {
+            cfg.nodes.clear();
+            for (const auto& n : j["nodes"]) {
+                // node hem string ("node-1") hem obje ({"id": "node-1"}) olabilir
+                if (n.is_string())            cfg.nodes.push_back(n.get<std::string>());
+                else if (n.contains("id"))    cfg.nodes.push_back(n["id"].get<std::string>());
+            }
+        }
+
+        if (j.contains("detection") && j["detection"].is_object()) {
+            const auto& d = j["detection"];
+            auto& p = cfg.detector;
+            p.fs              = d.value("fs",              p.fs);
+            p.sta_s           = d.value("sta_s",           p.sta_s);
+            p.lta_s           = d.value("lta_s",           p.lta_s);
+            p.trigger_on      = d.value("trigger_on",      p.trigger_on);
+            p.trigger_off     = d.value("trigger_off",     p.trigger_off);
+            p.env_window_s    = d.value("env_window_s",    p.env_window_s);
+            p.min_duration_ms = d.value("min_duration_ms", p.min_duration_ms);
+            p.min_peak_amp    = d.value("min_peak_amp",    p.min_peak_amp);
+        }
+        std::cout << "[CONFIG] Yüklendi: " << path << "\n";
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[CONFIG] Parse hatası (" << path << "): "
+                  << ex.what() << " — defaultlar kullanılıyor\n";
+    }
+}
 
 // ── Node meta — stream_meta'dan gelen son bilgi ───────────────
 // Her node için ayrı tutulur.
@@ -222,9 +281,9 @@ void onMessage(mosquitto*, void*, const mosquitto_message* msg) {
         }
 }
 
-// ── Argüman parser ────────────────────────────────────────────
-Config parseArgs(int argc, char* argv[]) {
-    Config cfg;
+// ── Argüman parser — config dosyasının ÜZERİNE yazar ─────────
+// (önce config.json yüklenir, sonra CLI argümanları override eder)
+void applyArgs(Config& cfg, int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
         if (arg == "--broker" && i + 1 < argc) {
@@ -237,11 +296,14 @@ Config parseArgs(int argc, char* argv[]) {
             std::string token;
             while (std::getline(ss, token, ','))
                 cfg.nodes.push_back(token);
+        } else if (arg == "--config" && i + 1 < argc) {
+            ++i;  // ana akışta zaten işlendi — burada atla
         } else if (arg == "--verbose" || arg == "-v") {
             cfg.verbose = true;
         } else if (arg == "--help" || arg == "-h") {
             std::cout
             << "Kullanım: groundeye_dsp [seçenekler]\n"
+            << "  --config <yol>       config.json yolu (detection params)\n"
             << "  --broker <ip>        MQTT broker IP\n"
             << "  --port <port>        MQTT port (varsayılan: 1883)\n"
             << "  --nodes <n1,n2,n3>   Node ID listesi\n"
@@ -249,12 +311,22 @@ Config parseArgs(int argc, char* argv[]) {
             std::exit(0);
         }
     }
-    return cfg;
 }
 
 // ── Main ──────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
-    g_cfg = parseArgs(argc, argv);
+    // 1) --config yolunu bul (varsa)
+    std::string config_path;
+    for (int i = 1; i < argc; ++i)
+        if (std::string(argv[i]) == "--config" && i + 1 < argc)
+            config_path = argv[i + 1];
+
+    // 2) config dosyasını yükle (detection params + broker/nodes)
+    if (!config_path.empty())
+        loadConfigFile(g_cfg, config_path);
+
+    // 3) CLI argümanları config'i override eder
+    applyArgs(g_cfg, argc, argv);
 
     std::signal(SIGINT,  onSignal);
     std::signal(SIGTERM, onSignal);
@@ -264,9 +336,16 @@ int main(int argc, char* argv[]) {
     std::cout << "Nodes  : ";
     for (const auto& n : g_cfg.nodes) std::cout << n << " ";
     std::cout << "\n";
+    const auto& d = g_cfg.detector;
+    std::cout << "Detect : fs=" << d.fs
+              << " sta=" << d.sta_s << "s lta=" << d.lta_s << "s"
+              << " on=" << d.trigger_on << " off=" << d.trigger_off
+              << " env=" << d.env_window_s << "s"
+              << " min_dur=" << d.min_duration_ms << "ms"
+              << " min_amp=" << d.min_peak_amp << "\n";
 
     for (const auto& node_id : g_cfg.nodes) {
-        auto dsp = std::make_unique<groundeye::NodeDSP>(node_id);
+        auto dsp = std::make_unique<groundeye::NodeDSP>(node_id, g_cfg.detector);
         dsp->setCallback(onEvent);
         g_nodes[node_id] = std::move(dsp);
         g_meta[node_id]  = NodeMeta{};

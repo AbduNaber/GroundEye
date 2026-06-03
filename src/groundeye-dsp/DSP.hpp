@@ -87,21 +87,25 @@ namespace groundeye {
     class EnvelopeEstimator {
     public:
         explicit EnvelopeEstimator(int window_samples = 50)
-        : window_(window_samples) {}
+        : window_(window_samples < 1 ? 1 : window_samples) {}
 
         double process(double x) {
-            buf_.push_back(x * x);      // x²
-            if ((int)buf_.size() > window_) buf_.pop_front();
-
-            double sum = 0.0;
-            for (auto v : buf_) sum += v;
-            return std::sqrt(sum / buf_.size());  // RMS = envelope
+            double sq = x * x;          // x²
+            buf_.push_back(sq);
+            sum_ += sq;                 // running sum — O(1) yerine O(window) değil
+            if ((int)buf_.size() > window_) {
+                sum_ -= buf_.front();
+                buf_.pop_front();
+            }
+            if (sum_ < 0.0) sum_ = 0.0; // kayan nokta drift koruması
+            return std::sqrt(sum_ / buf_.size());  // RMS = envelope
         }
 
-        void reset() { buf_.clear(); }
+        void reset() { buf_.clear(); sum_ = 0.0; }
 
     private:
         int window_;
+        double sum_ = 0.0;
         std::deque<double> buf_;
     };
 
@@ -112,51 +116,66 @@ namespace groundeye {
     public:
         STALTADetector(int sta_samples, int lta_samples,
                        double trigger_on, double trigger_off)
-        : sta_len_(sta_samples)
-        , lta_len_(lta_samples)
+        : sta_len_(sta_samples < 1 ? 1 : sta_samples)
+        , lta_len_(lta_samples < 1 ? 1 : lta_samples)
         , trigger_on_(trigger_on)
         , trigger_off_(trigger_off) {}
 
-        // Envelope değerini gönder, ratio döner
-        double process(double env) {
+        // Envelope değerini gönder, tetik durumu döner.
+        // ÖNEMLİ: Event sırasında LTA DONDURULUR (recharge prevention).
+        // Aksi halde event enerjisi LTA'ya sızar, ratio çöker ve
+        // event erken kesilir / parçalanır.
+        bool process(double env) {
+            // STA her zaman güncellenir (running sum)
             sta_buf_.push_back(env);
-            lta_buf_.push_back(env);
+            sta_sum_ += env;
+            if ((int)sta_buf_.size() > sta_len_) {
+                sta_sum_ -= sta_buf_.front();
+                sta_buf_.pop_front();
+            }
 
-            if ((int)sta_buf_.size() > sta_len_) sta_buf_.pop_front();
-            if ((int)lta_buf_.size() > lta_len_) lta_buf_.pop_front();
+            // LTA yalnızca event DIŞINDA güncellenir
+            if (!in_event_) {
+                lta_buf_.push_back(env);
+                lta_sum_ += env;
+                if ((int)lta_buf_.size() > lta_len_) {
+                    lta_sum_ -= lta_buf_.front();
+                    lta_buf_.pop_front();
+                }
+            }
 
-            double sta = mean(sta_buf_);
-            double lta = mean(lta_buf_);
-            return (lta > 1e-9) ? sta / lta : 0.0;
-        }
+            double sta = sta_buf_.empty() ? 0.0 : sta_sum_ / sta_buf_.size();
+            double lta = lta_buf_.empty() ? 0.0 : lta_sum_ / lta_buf_.size();
+            ratio_ = (lta > 1e-9) ? sta / lta : 0.0;
 
-        bool isTriggered(double ratio) const {
-            if (!in_event_ && ratio >= trigger_on_) {
+            // Tetik durum makinesi (histerezis)
+            if (!in_event_ && ratio_ >= trigger_on_) {
                 in_event_ = true;
-            } else if (in_event_ && ratio < trigger_off_) {
+            } else if (in_event_ && ratio_ < trigger_off_) {
                 in_event_ = false;
             }
             return in_event_;
         }
 
+        double ratio() const { return ratio_; }
+
         void reset() {
             sta_buf_.clear();
             lta_buf_.clear();
+            sta_sum_  = 0.0;
+            lta_sum_  = 0.0;
+            ratio_    = 0.0;
             in_event_ = false;
         }
 
     private:
         int sta_len_, lta_len_;
         double trigger_on_, trigger_off_;
-        mutable bool in_event_ = false;
+        bool   in_event_ = false;
+        double ratio_    = 0.0;
+        double sta_sum_  = 0.0;
+        double lta_sum_  = 0.0;
         std::deque<double> sta_buf_, lta_buf_;
-
-        static double mean(const std::deque<double>& d) {
-            if (d.empty()) return 0.0;
-            double s = 0.0;
-            for (auto v : d) s += v;
-            return s / d.size();
-        }
     };
 
     // ------------------------------------------------------------
@@ -173,23 +192,33 @@ namespace groundeye {
     };
 
     // ------------------------------------------------------------
+    //  DetectorParams — config.json'dan yüklenir, recompile gerekmez
+    // ------------------------------------------------------------
+    struct DetectorParams {
+        int    fs              = 2000;   // örnekleme frekansı (Hz)
+        double sta_s           = 0.1;    // STA penceresi (s)
+        double lta_s           = 1.0;    // LTA penceresi (s)
+        double trigger_on      = 2.0;    // tetik açma eşiği (ratio)
+        double trigger_off     = 1.3;    // tetik kapatma eşiği (ratio)
+        double env_window_s    = 0.05;   // envelope RMS penceresi (s)
+        double min_duration_ms = 80.0;   // bundan kısa eventları at (gürültü spike)
+        double min_peak_amp    = 0.0;    // bundan zayıf eventları at (0 = kapalı)
+    };
+
+    // ------------------------------------------------------------
     //  NodeDSP — tek bir node için tam pipeline
     // ------------------------------------------------------------
     class NodeDSP {
     public:
-        // fs=2000, sta=100ms, lta=1000ms, trigger_on=2.0, trigger_off=1.3
         explicit NodeDSP(std::string node_id,
-                         int fs = 2000,
-                         double sta_s = 0.1,
-                         double lta_s = 1.0,
-                         double trigger_on  = 2.0,
-                         double trigger_off = 1.3)
+                         const DetectorParams& p = DetectorParams{})
         : node_id_(std::move(node_id))
-        , fs_(fs)
-        , envelope_(static_cast<int>(0.05 * fs))   // 50ms envelope window
-        , stalta_(static_cast<int>(sta_s * fs),
-                  static_cast<int>(lta_s * fs),
-                  trigger_on, trigger_off)
+        , fs_(p.fs)
+        , params_(p)
+        , envelope_(static_cast<int>(p.env_window_s * p.fs))
+        , stalta_(static_cast<int>(p.sta_s * p.fs),
+                  static_cast<int>(p.lta_s * p.fs),
+                  p.trigger_on, p.trigger_off)
         {}
 
         // Callback tipi: event hazır olduğunda çağrılır
@@ -208,9 +237,8 @@ namespace groundeye {
             // 2) Envelope
             double env = envelope_.process(filtered);
 
-            // 3) STA/LTA
-            double ratio = stalta_.process(env);
-            bool   triggered = stalta_.isTriggered(ratio);
+            // 3) STA/LTA (LTA event sırasında dondurulur)
+            bool triggered = stalta_.process(env);
 
             // 4) Event state machine
             if (!in_event_ && triggered) {
@@ -238,7 +266,17 @@ namespace groundeye {
                     epoch_ms - event_onset_ms_);
 
                 // Çok kısa eventları atla (gürültü spike'ı)
-                if (duration_ms < 80.0) return;
+                if (duration_ms < params_.min_duration_ms) {
+                    event_samples_.clear();
+                    return;
+                }
+
+                // Zayıf eventları atla (düşük enerjili false trigger)
+                if (params_.min_peak_amp > 0.0 &&
+                    event_peak_amp_ < params_.min_peak_amp) {
+                    event_samples_.clear();
+                    return;
+                }
 
                 // RMS hesapla
                 double rms = 0.0;
@@ -286,6 +324,7 @@ namespace groundeye {
     private:
         std::string      node_id_;
         int              fs_;
+        DetectorParams   params_;
         IIRFilter        filter_;
         EnvelopeEstimator envelope_;
         STALTADetector   stalta_;

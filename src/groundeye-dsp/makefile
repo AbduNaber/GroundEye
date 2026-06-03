@@ -7,7 +7,7 @@ TARGET   = groundeye_dsp
 
 all: $(TARGET)
 
-$(TARGET): main.cpp dsp.hpp
+$(TARGET): main.cpp DSP.hpp
 	$(CXX) $(CXXFLAGS) main.cpp $(LIBS) -o $(TARGET)
 	@echo "Derlendi: $(TARGET)"
 

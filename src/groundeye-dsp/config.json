@@ -1,6 +1,17 @@
 {
   "broker": "localhost",
   "port": 1883,
+  "event_topic": "groundeye/event",
+  "detection": {
+    "fs": 2000,
+    "sta_s": 0.1,
+    "lta_s": 1.0,
+    "trigger_on": 2.0,
+    "trigger_off": 1.3,
+    "env_window_s": 0.05,
+    "min_duration_ms": 80,
+    "min_peak_amp": 0.0
+  },
   "fusion_window_ms": 2000,
   "min_nodes_for_location": 2,
   "sqlite_path": "/tmp/groundeye.db",
