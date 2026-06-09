@@ -1,15 +1,18 @@
 """Signals tab: live waveforms per node via pyqtgraph."""
 import collections
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QPushButton, QScrollArea
+    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QScrollArea
 )
 import numpy as np
 import pyqtgraph as pg
 
-from pyqt_app.services.store import store
+from pyqt_app.services.store import store, MQTT_NODE_MAP
 from pyqt_app.services.bus import bus
+
+_STORE_TO_MQTT = {v: k for k, v in MQTT_NODE_MAP.items()}
+
+BUFFER_LEN = 4000  # samples shown (~2 s at 2000 Hz)
 
 
 class SignalRow(QFrame):
@@ -44,12 +47,13 @@ class SignalRow(QFrame):
         self.plot.hideAxis('left'); self.plot.hideAxis('bottom')
         self.plot.setMouseEnabled(x=False, y=False)
         self.plot.setYRange(-1, 1)
-        self.plot.setXRange(0, 500)
+        self.plot.setXRange(0, BUFFER_LEN)
         self.plot.addLine(y=0, pen=pg.mkPen("#ffffff20"))
         self.plot.addLine(y=0.38, pen=pg.mkPen("#d86a5b60", style=Qt.PenStyle.DashLine))
         self.plot.addLine(y=-0.38, pen=pg.mkPen("#d86a5b60", style=Qt.PenStyle.DashLine))
         self.curve = self.plot.plot(pen=pg.mkPen(self._color(), width=1.2))
-        self.buffer = collections.deque([0.0] * 500, maxlen=500)
+        self.buffer = collections.deque([0.0] * BUFFER_LEN, maxlen=BUFFER_LEN)
+        self._x = np.arange(BUFFER_LEN)
         lay.addWidget(self.plot, 1)
 
         # Right: stats
@@ -69,7 +73,7 @@ class SignalRow(QFrame):
 
         self.update_stats()
         bus.node_updated.connect(self._on_node_updated)
-        bus.sample_received.connect(self._on_sample)
+        bus.stream_received.connect(self._on_stream)
 
     def _color(self):
         s = self.node.status
@@ -77,13 +81,17 @@ class SignalRow(QFrame):
                 else "#5c6771" if s == "offline"
                 else "#d4a84b")
 
-    def _on_sample(self, nid, amp):
-        if nid != self.node.id: return
-        # Fake waveform expansion around amp
-        for i in range(5):
-            v = amp * np.sin(i * 0.7 + np.random.rand() * 2) + (np.random.rand() - 0.5) * 0.05
-            self.buffer.append(max(-1, min(1, v)))
-        self.curve.setData(np.arange(500), np.array(self.buffer))
+    def _on_stream(self, mqtt_nid: str, samples) -> None:
+        if mqtt_nid != _STORE_TO_MQTT.get(self.node.id, ""):
+            return
+        self.buffer.extend(samples.tolist())
+        arr = np.array(self.buffer, dtype=np.float32)
+        self.curve.setData(self._x, arr)
+        # Live stats from actual buffer
+        rms = float(np.sqrt(np.mean(arr ** 2)))
+        peak = float(np.max(np.abs(arr)))
+        self.stats["RMS"].setText(f"{rms:.3f}")
+        self.stats["PEAK"].setText(f"{peak:.3f}")
 
     def _on_node_updated(self, node):
         if node.id != self.node.id: return
@@ -95,12 +103,10 @@ class SignalRow(QFrame):
 
     def update_stats(self):
         n = self.node
-        self.stats["RMS"].setText(f"{n.signal*0.6:.3f}")
-        self.stats["PEAK"].setText(f"{n.signal:.2f}")
         self.stats["THRESH"].setText(f"{n.threshold:.2f}")
-        self.stats["FREQ"].setText("2.1 Hz" if n.status == "triggered" else "—")
+        self.stats["FREQ"].setText("—")
         self.stats["BATT"].setText(f"{int(n.battery*100)}%")
-        self.stats["LINK"].setText("--" if n.status == "offline" else "-64 dBm")
+        self.stats["LINK"].setText(f"{n.rssi_dbm} dBm" if n.status != "offline" else "—")
 
 
 class SignalsTab(QWidget):
@@ -113,11 +119,11 @@ class SignalsTab(QWidget):
         tb = QFrame(); tb.setObjectName("eventsToolbar")
         hl = QHBoxLayout(tb)
         hl.setContentsMargins(12, 0, 12, 0)
-        l = QLabel("LIVE SEISMIC · 500 Hz SAMPLING · BANDPASS 5–40 Hz")
+        l = QLabel("LIVE SEISMIC · 2000 Hz SAMPLING · RAW INT16")
         l.setProperty("role", "monoSmall")
         hl.addWidget(l)
         hl.addStretch(1)
-        r = QLabel("WINDOW 4.0s · AUTO-SCROLL"); r.setProperty("role", "monoMute")
+        r = QLabel("WINDOW 2.0s · AUTO-SCROLL"); r.setProperty("role", "monoMute")
         hl.addWidget(r)
         lay.addWidget(tb)
 

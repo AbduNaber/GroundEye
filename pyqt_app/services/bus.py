@@ -18,6 +18,7 @@ class Bus(QObject):
     mqtt_event_received = pyqtSignal(dict)    # groundeye/event payload
     mqtt_connected = pyqtSignal(str, int)     # host, port
     mqtt_disconnected = pyqtSignal()
+    stream_received = pyqtSignal(str, object) # mqtt_node_id, np.ndarray float32 -1..1
 
     # Recorder / player signals
     recording_started = pyqtSignal(str)       # filepath

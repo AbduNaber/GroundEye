@@ -21,6 +21,7 @@ from pyqt_app.services import settings as cfg
 logger = logging.getLogger(__name__)
 
 TOPICS = ["groundeye/location", "groundeye/status", "groundeye/event"]
+STREAM_TOPIC_PREFIX = "groundeye/stream/"  # binary int16 batches from ESP
 HEARTBEAT_TIMEOUT = 30.0  # seconds before node → offline
 RMS_MAX = 300.0            # normalise rms_energy to 0..1
 _live_counter = 0
@@ -52,6 +53,7 @@ class MqttBridge(QObject):
     _sig_event = pyqtSignal(dict)
     _sig_connected = pyqtSignal(str, int)
     _sig_disconnected = pyqtSignal()
+    _sig_stream = pyqtSignal(str, object)  # mqtt_node_id, np.ndarray
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,6 +68,7 @@ class MqttBridge(QObject):
         self._sig_event.connect(bus.mqtt_event_received)
         self._sig_connected.connect(bus.mqtt_connected)
         self._sig_disconnected.connect(bus.mqtt_disconnected)
+        self._sig_stream.connect(bus.stream_received)
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,17 +132,31 @@ class MqttBridge(QObject):
             return
         for topic in TOPICS:
             client.subscribe(topic)
+        client.subscribe(STREAM_TOPIC_PREFIX + "+")
         self._sig_connected.emit(self._host, self._port)
 
     def _on_disconnect(self, client, userdata, *args):
         self._sig_disconnected.emit()
 
     def _on_message(self, client, userdata, message):
+        import numpy as np
+        topic = message.topic
+
+        # Binary int16 audio stream — handle before JSON decode
+        if topic.startswith(STREAM_TOPIC_PREFIX):
+            node_id = topic[len(STREAM_TOPIC_PREFIX):]
+            try:
+                samples = np.frombuffer(message.payload, dtype=np.int16).astype(np.float32) / 32768.0
+                if samples.size:
+                    self._sig_stream.emit(node_id, samples)
+            except Exception:
+                pass
+            return
+
         try:
             payload = json.loads(message.payload.decode())
         except Exception:
             return
-        topic = message.topic
         if topic == "groundeye/location":
             self._sig_location.emit(payload)
         elif topic == "groundeye/status":
