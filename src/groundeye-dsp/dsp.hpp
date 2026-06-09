@@ -20,33 +20,38 @@
 namespace groundeye {
 
     // ------------------------------------------------------------
-    //  Butterworth bandpass — Second-Order Sections (biquad kaskadı)
-    //  scipy.signal.butter(4, [2, 25], 'bandpass', fs=2000) -> tf2sos
-    //
-    //  İNSAN YÜRÜYÜŞÜ bandı (2-25 Hz):
-    //    - Adım sismik enerjisini (≈2-25 Hz) geçirir.
-    //    - 50 Hz şebeke hum'ını ~26 dB (≈20×) bastırır.
-    //    - 100 Hz+ gürültüyü ~51 dB ezer.
-    //  (Tokmak için eski band 4-80 Hz idi; 50 Hz'i hiç süzmüyordu.)
-    //
-    //  NEDEN SOS: Bu düşük bantta kutuplar birim çembere çok yakın
-    //  (|z| ≈ 0.9998). Tek 8. derece Direct Form bölüm sayısal olarak
-    //  bozulur (~%2 hata). Biquad kaskadı her bantta kararlıdır.
-    //
-    //  Bandı değiştirmek için: yukarıdaki scipy satırını çalıştır,
-    //  tf2sos çıktısını aşağıdaki tabloya yapıştır.
+    //  Butterworth bandpass katsayıları
+    //  scipy.signal.butter(4, [4, 80], btype='bandpass', fs=2000)
+    //  8. derece IIR (4. derece bandpass = 2x 4. derece)
     // ------------------------------------------------------------
-    static constexpr int NUM_SECTIONS = 4;
-    // Her satır: { b0, b1, b2, a1, a2 }   (a0 = 1 normalize edilmiş)
-    static constexpr double SOS[NUM_SECTIONS][5] = {
-        { 1.552871946694384e-06, 3.10593715473906e-06, 1.553065220071868e-06, -1.882028838218187, 0.8863611291259829 },
-        { 1.0, 1.999875545855084, 0.9998755535987913, -1.944446890318106, 0.9502473232947605 },
-        { 1.0, -1.999999995912507, 1.000000002038517, -1.993438666977459, 0.9935148024522368 },
-        { 1.0, -2.000000004087489, 0.9999999979614813, -1.989361721724033, 0.989363272472687 }
+    static constexpr int FILTER_ORDER = 8;
+
+    static constexpr double B[FILTER_ORDER + 1] = {
+        0.00015140978602327354,
+        0.0,
+        -0.0006056391440930942,
+        0.0,
+        0.0009084587161396413,
+        0.0,
+        -0.0006056391440930942,
+        0.0,
+        0.00015140978602327354
+    };
+
+    static constexpr double A[FILTER_ORDER + 1] = {
+        1.0,
+        -7.36508881404129,
+        23.759641924916412,
+        -43.853259539567226,
+        50.65340482669531,
+        -37.49565167249384,
+        17.37135926566954,
+        -4.605314959075437,
+        0.5349089679706243
     };
 
     // ------------------------------------------------------------
-    //  IIR Filter — biquad kaskadı (her bölüm Transposed Direct Form II)
+    //  IIR Filter — Direct Form II Transposed
     //  Sayısal olarak kararlı, gerçek zamanlı stream için ideal.
     // ------------------------------------------------------------
     class IIRFilter {
@@ -54,27 +59,22 @@ namespace groundeye {
         IIRFilter() { reset(); }
 
         void reset() {
-            for (auto& v : z1_) v = 0.0;
-            for (auto& v : z2_) v = 0.0;
+            for (auto& v : state_) v = 0.0;
         }
 
-        // Her yeni sample için bir kez çağır — filtrelenmiş değeri döner.
-        // Sinyal bölümler arasında zincirleme akar (kaskad).
+        // Her yeni sample için bir kez çağır — filtrelenmiş değeri döner
         double process(double x) {
-            for (int s = 0; s < NUM_SECTIONS; ++s) {
-                const double b0 = SOS[s][0], b1 = SOS[s][1], b2 = SOS[s][2];
-                const double a1 = SOS[s][3], a2 = SOS[s][4];
-                double y = b0 * x + z1_[s];
-                z1_[s]   = b1 * x - a1 * y + z2_[s];
-                z2_[s]   = b2 * x - a2 * y;
-                x = y;   // bu bölümün çıkışı → sonraki bölümün girişi
+            double y = B[0] * x + state_[0];
+            for (int i = 1; i < FILTER_ORDER; ++i) {
+                state_[i - 1] = B[i] * x - A[i] * y + state_[i];
             }
-            return x;
+            state_[FILTER_ORDER - 1] = B[FILTER_ORDER] * x
+            - A[FILTER_ORDER] * y;
+            return y;
         }
 
     private:
-        std::array<double, NUM_SECTIONS> z1_{};
-        std::array<double, NUM_SECTIONS> z2_{};
+        std::array<double, FILTER_ORDER> state_{};
     };
 
     // ------------------------------------------------------------

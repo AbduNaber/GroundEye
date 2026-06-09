@@ -13,8 +13,8 @@
 //    ./groundeye_orch --config config.json
 // ============================================================
 
-#include "Orchestrator.hpp"
-#include "Logger.hpp"
+#include "orchestrator.hpp"
+#include "logger.hpp"
 
 #include <mosquitto.h>
 

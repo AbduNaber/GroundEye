@@ -14,7 +14,7 @@
 //    ./groundeye_dsp --broker localhost --nodes node-1,node-2,node-3
 // ============================================================
 
-#include "DSP.hpp"
+#include "dsp.hpp"
 
 #include <mosquitto.h>
 #include <nlohmann/json.hpp>
