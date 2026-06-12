@@ -202,6 +202,7 @@ void onMessage(mosquitto*, void*, const mosquitto_message* msg) {
         e.rms_energy     = j["rms_energy"].get<double>();
         e.peak_amplitude = j["peak_amplitude"].get<double>();
         e.duration_ms    = j["duration_ms"].get<double>();
+        e.time_synced    = j.value("time_synced", false);
 
         std::lock_guard<std::mutex> lock(g_pending_mutex);
         g_pending.push_back({e, epochMs()});

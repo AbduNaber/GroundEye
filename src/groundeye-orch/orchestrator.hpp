@@ -20,8 +20,9 @@ namespace groundeye {
     // ------------------------------------------------------------
     struct NodePosition {
         std::string id;
-        double x;   // metre
-        double y;   // metre
+        double x;      // metre
+        double y;      // metre
+        double gain = 1.0;  // RMS normalizasyon katsayısı (kalibrasyon sonucu)
     };
 
     // ------------------------------------------------------------
@@ -54,12 +55,14 @@ namespace groundeye {
             if (j.contains("dist_scale") && !j["dist_scale"].is_null())
                 c.dist_scale = j.value("dist_scale", -1.0);
 
-            for (const auto& n : j["nodes"])
-                c.nodes.push_back({
-                    n["id"].get<std::string>(),
-                                  n["x"].get<double>(),
-                                  n["y"].get<double>()
-                });
+            for (const auto& n : j["nodes"]) {
+                NodePosition np;
+                np.id   = n["id"].get<std::string>();
+                np.x    = n["x"].get<double>();
+                np.y    = n["y"].get<double>();
+                np.gain = n.value("gain", 1.0);
+                c.nodes.push_back(np);
+            }
             return c;
         }
     };
@@ -138,11 +141,13 @@ namespace groundeye {
                                        for (const auto& e : events) {
                                            auto pos = find(e.node_id);
                                            if (!pos) continue;
-                                           sw  += e.rms_energy;
-                                           swx += e.rms_energy * pos->x;
-                                           swy += e.rms_energy * pos->y;
-                                           if (e.rms_energy < min_rms) min_rms = e.rms_energy;
-                                           if (e.rms_energy > max_r)   max_r   = e.rms_energy;
+                                           // Kazanç ile normalize edilmiş RMS kullan
+                                           double rms_norm = e.rms_energy * pos->gain;
+                                           sw  += rms_norm;
+                                           swx += rms_norm * pos->x;
+                                           swy += rms_norm * pos->y;
+                                           if (rms_norm < min_rms) min_rms = rms_norm;
+                                           if (rms_norm > max_r)   max_r   = rms_norm;
                                        }
 
                                        if (sw < 1e-9) return r;
@@ -203,27 +208,34 @@ namespace groundeye {
                                    for (const auto& e : events)
                                        if (!e.time_synced) return r;
 
-                                       // Node konumlarını ve onset zamanlarını eşleştir
+                                       // Node konumlarini ve peak zamanlarini eslesir
+                                       // peak_ms onset_ms'ten cok daha tutarli —
+                                       // STA/LTA gecikmesinden etkilenmiyor.
                                        struct Anchor {
                                            double   x, y;
                                            uint64_t onset_ms;
+                                           uint64_t peak_ms;
                                        };
                                    std::vector<Anchor> anchors;
                                    for (const auto& e : events) {
                                        auto pos = find(e.node_id);
                                        if (!pos) continue;
-                                       anchors.push_back({pos->x, pos->y, e.onset_ms});
+                                       anchors.push_back({pos->x, pos->y, e.onset_ms, e.peak_ms});
                                    }
                                    if (anchors.size() < 3) return r;
 
-                                   // Referans node: en erken onset (node 0)
-                                   // Diğerleri için Δt hesapla
-                                   // Not: onset_ms uint64 — fark negatif olabilir (geç gelen)
-                                   //      int64_t'ye cast ederek işaretle farkı alıyoruz
+                                   // Referans: en erken peak_ms one al
+                                   std::sort(anchors.begin(), anchors.end(),
+                                       [](const Anchor& a, const Anchor& b) {
+                                           return a.peak_ms < b.peak_ms;
+                                       });
+
+                                   // dt_ms: peak zamanı farkı (ms)
+                                   // peak_ms uint64 — int64_t cast ile isaretli fark
                                    auto dt_ms = [&](int i) -> double {
                                        return static_cast<double>(
-                                           static_cast<int64_t>(anchors[i].onset_ms)
-                                           - static_cast<int64_t>(anchors[0].onset_ms)
+                                           static_cast<int64_t>(anchors[i].peak_ms)
+                                           - static_cast<int64_t>(anchors[0].peak_ms)
                                        );
                                    };
 

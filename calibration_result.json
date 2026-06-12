@@ -1,0 +1,45 @@
+{
+  "calibrated_at": "2026-06-11T20:29:10Z",
+  "global_detection": {
+    "fs": 2000,
+    "sta_s": 0.1,
+    "lta_s": 1.0,
+    "trigger_on": 1.8,
+    "trigger_off": 1.2,
+    "env_window_s": 0.05,
+    "min_duration_ms": 80,
+    "min_peak_amp": 23.33
+  },
+  "nodes": {
+    "node-1": {
+      "trigger_on": 1.8,
+      "trigger_off": 1.2,
+      "min_peak_amp": 41.34,
+      "fs": 2000,
+      "sta_s": 0.1,
+      "lta_s": 1.0,
+      "env_window_s": 0.05,
+      "min_duration_ms": 80
+    },
+    "node-2": {
+      "trigger_on": 1.8,
+      "trigger_off": 1.2,
+      "min_peak_amp": 26.53,
+      "fs": 2000,
+      "sta_s": 0.1,
+      "lta_s": 1.0,
+      "env_window_s": 0.05,
+      "min_duration_ms": 80
+    },
+    "node-3": {
+      "trigger_on": 1.8,
+      "trigger_off": 1.2,
+      "min_peak_amp": 31.4,
+      "fs": 2000,
+      "sta_s": 0.1,
+      "lta_s": 1.0,
+      "env_window_s": 0.05,
+      "min_duration_ms": 80
+    }
+  }
+}

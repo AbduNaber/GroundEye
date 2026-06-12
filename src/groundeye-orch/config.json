@@ -4,13 +4,13 @@
   "event_topic": "groundeye/event",
   "detection": {
     "fs": 2000,
-    "sta_s": 0.10,
-    "lta_s": 1.00,
-    "trigger_on": 1.80,
-    "trigger_off": 1.20,
+    "sta_s": 0.1,
+    "lta_s": 1.0,
+    "trigger_on": 3.0,
+    "trigger_off": 1.95,
     "env_window_s": 0.05,
     "min_duration_ms": 80,
-    "min_peak_amp": 113.72
+    "min_peak_amp": 0.0
   },
   "fusion_window_ms": 2000,
   "min_nodes_for_location": 2,
@@ -20,17 +20,35 @@
     {
       "id": "node-1",
       "x": 0.0,
-      "y": 0.0
+      "y": 0.0,
+      "detection": {
+        "trigger_on": 5.99,
+        "trigger_off": 3.89,
+        "min_peak_amp": 2719.72
+      },
+      "gain": 1.2029
     },
     {
       "id": "node-2",
-      "x": 3.0,
-      "y": 0.0
+      "x": 0.8,
+      "y": 0.0,
+      "detection": {
+        "trigger_on": 9.3,
+        "trigger_off": 6.05,
+        "min_peak_amp": 2563.32
+      },
+      "gain": 1.0
     },
     {
       "id": "node-3",
-      "x": 1.5,
-      "y": 2.6
+      "x": 0.4,
+      "y": 0.6928,
+      "detection": {
+        "trigger_on": 7.07,
+        "trigger_off": 4.6,
+        "min_peak_amp": 2935.26
+      },
+      "gain": 1.9789
     }
   ],
   "wave_speed_ms": 0.2
