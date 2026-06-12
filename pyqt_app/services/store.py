@@ -2,39 +2,33 @@
 from typing import List, Optional
 from pyqt_app.models.node import Node
 from pyqt_app.models.event import Event, make_waveform
+from pyqt_app.services import layout as _layout
 
-# Maps MQTT node IDs → store node IDs
-MQTT_NODE_MAP: dict[str, str] = {
-    "node-1": "N01",
-    "node-2": "N02",
-    "node-3": "N03",
-}
+_field = _layout.load()
 
-# Physical field dimensions in metres (matches C++ orchestration config)
-# node-1: (0, 0)  node-2: (3, 0)  node-3: (1.5, 2.6)
-PHYS_W_M: float = 3.0    # x span in metres
-PHYS_H_M: float = 2.6    # y span in metres
+# Maps MQTT node IDs → store node IDs  (derived from layout.json)
+MQTT_NODE_MAP: dict[str, str] = {n.id: n.store_id for n in _field.nodes}
+
+# Physical field dimensions in metres
+PHYS_W_M: float = _field.width_m
+PHYS_H_M: float = _field.height_m
 
 
 def _seed_nodes() -> List[Node]:
-    return [
-        # x/y = physical normalised coords: node-1(0,0) node-2(1,0) node-3(0.5,1)
-        Node(id="N01", name="NODE-01", label="node-1",
-             x=0.0, y=0.0, lat=40.81236, lon=29.35912,
-             status="offline", rssi=0, battery=0.86, temp=12.4,
-             threshold=0.38, signal=0.0, last_trigger="—",
-             mac="34:85:18:AA:12:01"),
-        Node(id="N02", name="NODE-02", label="node-2",
-             x=1.0, y=0.0, lat=40.81194, lon=29.35978,
-             status="offline", rssi=0, battery=0.72, temp=13.1,
-             threshold=0.38, signal=0.0, last_trigger="—",
-             mac="34:85:18:AA:12:02"),
-        Node(id="N03", name="NODE-03", label="node-3",
-             x=0.5, y=1.0, lat=40.81144, lon=29.36024,
-             status="offline", rssi=0, battery=0.44, temp=11.8,
-             threshold=0.38, signal=0.0, last_trigger="—",
-             mac="34:85:18:AA:12:03"),
-    ]
+    nodes = []
+    for nl in _field.nodes:
+        idx = int(nl.store_id[1:])  # "N01" → 1
+        nodes.append(Node(
+            id=nl.store_id,
+            name=f"NODE-{idx:02d}",
+            label=nl.id,
+            x=nl.x, y=nl.y,
+            lat=0.0, lon=0.0,
+            status="offline", rssi=0, battery=0.0, temp=0.0,
+            threshold=0.38, signal=0.0, last_trigger="—",
+            mac="",
+        ))
+    return nodes
 
 
 def _seed_events() -> List[Event]:

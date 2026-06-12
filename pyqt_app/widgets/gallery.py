@@ -27,9 +27,9 @@ class GalleryCard(QFrame):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        photo = Photo(ev)
-        photo.setMinimumHeight(140)
-        lay.addWidget(photo, 1)
+        self.photo_widget = Photo(ev)
+        self.photo_widget.setMinimumHeight(140)
+        lay.addWidget(self.photo_widget, 1)
         meta = QVBoxLayout(); meta.setContentsMargins(10, 8, 10, 8); meta.setSpacing(2)
         top = QHBoxLayout()
         idl = QLabel(ev.id); idl.setStyleSheet("font-family: 'JetBrains Mono'; font-size: 10px; color: #d8e0e6;")
@@ -82,6 +82,8 @@ class GalleryTab(QWidget):
         lay.addWidget(self.scroll, 1)
 
         self._refresh()
+        bus.event_received.connect(lambda _ev: self._refresh())
+        bus.event_photo_saved.connect(self._on_photo_saved)
 
     def _set_filter(self, key, val):
         self.filters[key] = val
@@ -102,8 +104,19 @@ class GalleryTab(QWidget):
             out.append(e)
         return out
 
+    def _on_photo_saved(self, event_id: str, _filepath: str):
+        # Find the card showing this event and repaint its Photo widget
+        for i in range(self.grid.count()):
+            item = self.grid.itemAt(i)
+            if item and item.widget():
+                card = item.widget()
+                if isinstance(card, GalleryCard) and card.ev.id == event_id:
+                    card.photo_widget.update()
+                    return
+        # Card not visible under current filter — rebuild grid entirely
+        self._refresh()
+
     def _refresh(self):
-        # Clear grid
         while self.grid.count():
             it = self.grid.takeAt(0)
             w = it.widget()

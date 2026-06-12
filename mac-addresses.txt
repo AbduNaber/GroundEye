@@ -1,0 +1,3 @@
+44:1d:64:f4:34:58 node-1 node mcu
+14:2b:2f:c7:36:d0 wemos
+08:3a:f2:68:00:84 node 2 devkit

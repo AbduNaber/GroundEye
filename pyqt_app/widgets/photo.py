@@ -1,6 +1,6 @@
-"""Stylized photo placeholder (matches the HTML mock)."""
+"""Photo widget: renders a real JPEG if event.photo_path is set, else a stylized placeholder."""
 from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QLinearGradient, QPolygonF, QPainterPath
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QLinearGradient, QPolygonF, QPainterPath, QPixmap
 from PyQt6.QtCore import QPointF
 from PyQt6.QtWidgets import QWidget
 
@@ -20,6 +20,40 @@ class Photo(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect()
+
+        # ── Real JPEG path ────────────────────────────────────────────────────
+        if self.event and self.event.photo_path:
+            pix = QPixmap(self.event.photo_path)
+            if not pix.isNull():
+                scaled = pix.scaled(
+                    r.size(),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                # Center-crop to widget rect
+                x_off = (scaled.width()  - r.width())  // 2
+                y_off = (scaled.height() - r.height()) // 2
+                from PyQt6.QtCore import QRect
+                p.drawPixmap(r, scaled, QRect(x_off, y_off, r.width(), r.height()))
+
+                # HUD overlay
+                if self.event:
+                    small = QFont("JetBrains Mono", 7)
+                    p.setFont(small)
+                    p.setPen(QColor(255, 255, 255, 180))
+                    p.fillRect(0, 0, r.width(), 18, QColor(0, 0, 0, 100))
+                    p.fillRect(0, r.height() - 18, r.width(), 18, QColor(0, 0, 0, 100))
+                    p.drawText(8, 13, f"CAM {'IR' if self.event.night else 'RGB'}")
+                    p.drawText(r.width() - 140, 13,
+                               f"{self.event.date} {self.event.ts[:8]}")
+                    p.drawText(8, r.height() - 5,
+                               f"{self.event.node_id} · {self.event.distance:.1f}m")
+                    if self.big:
+                        p.setPen(QColor(216, 106, 91))
+                        p.drawText(r.width() - 44, 13, "● REC")
+                p.end()
+                return
+        # ─────────────────────────────────────────────────────────────────────
         night = bool(self.event and self.event.night)
         tag = (self.event.tag if self.event else "") or ""
 

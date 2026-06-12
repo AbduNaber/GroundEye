@@ -44,20 +44,40 @@ struct Config {
     bool        verbose     = false;
     std::string config_path = "";   // boş = config dosyası yükleme
 
-    // Tüm node'lara uygulanan detection parametreleri.
-    // config.json "detection" bloğundan yüklenir — recompile gerekmez.
+    // Global detection parametreleri — tüm node'lar için default.
+    // config.json "detection" bloğundan yüklenir.
     groundeye::DetectorParams detector;
+
+    // Per-node detection parametreleri — varsa global'i override eder.
+    // config.json nodes[i].detection bloğundan yüklenir.
+    // Anahtar: node_id (örn. "node-1")
+    std::map<std::string, groundeye::DetectorParams> node_detectors;
 };
 
 // ── config.json'dan detection parametrelerini yükle ──────────
 // Beklenen yapı (hepsi opsiyonel, eksikler default kalır):
-//   { "broker": "...", "port": 1883, "nodes": ["node-1", ...],
+//   { "broker": "...", "port": 1883,
 //     "event_topic": "...",
-//     "detection": {
-//       "fs": 2000, "sta_s": 0.1, "lta_s": 1.0,
-//       "trigger_on": 2.0, "trigger_off": 1.3,
-//       "env_window_s": 0.05, "min_duration_ms": 80,
-//       "min_peak_amp": 0.0 } }
+//     "detection": { ... },          ← global default
+//     "nodes": [
+//       { "id": "node-1", "x": 0, "y": 0,
+//         "detection": { ... } },    ← per-node override (opsiyonel)
+//       { "id": "node-2", "x": 3, "y": 0 }
+//     ] }
+
+// Yardımcı: JSON bloğundan DetectorParams yükle (eksikler base'den kalır)
+static void parseDetectionBlock(const json& d,
+                                groundeye::DetectorParams& p) {
+    p.fs              = d.value("fs",              p.fs);
+    p.sta_s           = d.value("sta_s",           p.sta_s);
+    p.lta_s           = d.value("lta_s",           p.lta_s);
+    p.trigger_on      = d.value("trigger_on",      p.trigger_on);
+    p.trigger_off     = d.value("trigger_off",     p.trigger_off);
+    p.env_window_s    = d.value("env_window_s",    p.env_window_s);
+    p.min_duration_ms = d.value("min_duration_ms", p.min_duration_ms);
+    p.min_peak_amp    = d.value("min_peak_amp",    p.min_peak_amp);
+}
+
 void loadConfigFile(Config& cfg, const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) {
@@ -72,28 +92,39 @@ void loadConfigFile(Config& cfg, const std::string& path) {
         cfg.port        = j.value("port",        cfg.port);
         cfg.event_topic = j.value("event_topic", cfg.event_topic);
 
+        // ── Global detection default ──────────────────────────
+        if (j.contains("detection") && j["detection"].is_object())
+            parseDetectionBlock(j["detection"], cfg.detector);
+
+        // ── Node listesi + per-node detection override ────────
         if (j.contains("nodes") && j["nodes"].is_array() &&
             !j["nodes"].empty()) {
             cfg.nodes.clear();
             for (const auto& n : j["nodes"]) {
-                // node hem string ("node-1") hem obje ({"id": "node-1"}) olabilir
-                if (n.is_string())            cfg.nodes.push_back(n.get<std::string>());
-                else if (n.contains("id"))    cfg.nodes.push_back(n["id"].get<std::string>());
+                std::string node_id;
+                // node hem string ("node-1") hem obje ({"id":"node-1"}) olabilir
+                if (n.is_string()) {
+                    node_id = n.get<std::string>();
+                } else if (n.is_object() && n.contains("id")) {
+                    node_id = n["id"].get<std::string>();
+
+                    // Per-node detection bloğu varsa yükle
+                    if (n.contains("detection") && n["detection"].is_object()) {
+                        // Global default'u base olarak al, üzerine override uygula
+                        groundeye::DetectorParams p = cfg.detector;
+                        parseDetectionBlock(n["detection"], p);
+                        cfg.node_detectors[node_id] = p;
+                        std::cout << "[CONFIG] Per-node detection: " << node_id
+                                  << " on=" << p.trigger_on
+                                  << " off=" << p.trigger_off
+                                  << " min_amp=" << p.min_peak_amp << "\n";
+                    }
+                }
+                if (!node_id.empty())
+                    cfg.nodes.push_back(node_id);
             }
         }
 
-        if (j.contains("detection") && j["detection"].is_object()) {
-            const auto& d = j["detection"];
-            auto& p = cfg.detector;
-            p.fs              = d.value("fs",              p.fs);
-            p.sta_s           = d.value("sta_s",           p.sta_s);
-            p.lta_s           = d.value("lta_s",           p.lta_s);
-            p.trigger_on      = d.value("trigger_on",      p.trigger_on);
-            p.trigger_off     = d.value("trigger_off",     p.trigger_off);
-            p.env_window_s    = d.value("env_window_s",    p.env_window_s);
-            p.min_duration_ms = d.value("min_duration_ms", p.min_duration_ms);
-            p.min_peak_amp    = d.value("min_peak_amp",    p.min_peak_amp);
-        }
         std::cout << "[CONFIG] Yüklendi: " << path << "\n";
     }
     catch (const std::exception& ex) {
@@ -342,14 +373,30 @@ int main(int argc, char* argv[]) {
               << " on=" << d.trigger_on << " off=" << d.trigger_off
               << " env=" << d.env_window_s << "s"
               << " min_dur=" << d.min_duration_ms << "ms"
-              << " min_amp=" << d.min_peak_amp << "\n";
+              << " min_amp=" << d.min_peak_amp
+              << " (global default)\n";
 
     for (const auto& node_id : g_cfg.nodes) {
-        auto dsp = std::make_unique<groundeye::NodeDSP>(node_id, g_cfg.detector);
+        // Per-node params varsa kullan, yoksa global default
+        auto it = g_cfg.node_detectors.find(node_id);
+        const groundeye::DetectorParams& params =
+            (it != g_cfg.node_detectors.end()) ? it->second : g_cfg.detector;
+
+        auto dsp = std::make_unique<groundeye::NodeDSP>(node_id, params);
         dsp->setCallback(onEvent);
         g_nodes[node_id] = std::move(dsp);
         g_meta[node_id]  = NodeMeta{};
-        std::cout << "[DSP] Node hazır: " << node_id << "\n";
+
+        // Hangi parametrelerle başladığını logla
+        if (it != g_cfg.node_detectors.end()) {
+            std::cout << "[DSP] Node hazır: " << node_id
+                      << " (per-node: on=" << params.trigger_on
+                      << " off=" << params.trigger_off
+                      << " min_amp=" << params.min_peak_amp << ")\n";
+        } else {
+            std::cout << "[DSP] Node hazır: " << node_id
+                      << " (global default)\n";
+        }
     }
 
     mosquitto_lib_init();

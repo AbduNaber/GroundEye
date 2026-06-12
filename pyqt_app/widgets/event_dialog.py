@@ -94,23 +94,27 @@ class EventDialog(QDialog):
         gl.addWidget(cell("THRESHOLD", f"{node.threshold:.2f}" if node else "—"), 2, 1)
         ml.addWidget(grid)
 
-        # Waveform
+        # Waveforms — one row per participating node
         wf_wrap = QFrame()
         wf_wrap.setStyleSheet("background: #0f1317; border: 1px solid #242c34;")
-        wv = QVBoxLayout(wf_wrap); wv.setContentsMargins(10, 10, 10, 10); wv.setSpacing(6)
-        wh = QHBoxLayout()
-        wh1 = QLabel(f"SEISMIC · {event.node_id}"); wh1.setProperty("role", "monoMute")
-        wh2 = QLabel("T−2.0s → T+2.0s · peak @ T+0.42s"); wh2.setProperty("role", "monoMute")
-        wh.addWidget(wh1); wh.addStretch(1); wh.addWidget(wh2)
-        wv.addLayout(wh)
-        wf = WaveformMini(event.waveform)
-        wf.setFixedHeight(110)
-        wv.addWidget(wf)
-        ax = QHBoxLayout()
-        for t in ("−2.0s", "0", "+2.0s"):
-            l = QLabel(t); l.setProperty("role", "monoMute")
-            ax.addWidget(l); ax.addStretch(1)
-        wv.addLayout(ax)
+        wv = QVBoxLayout(wf_wrap); wv.setContentsMargins(10, 10, 10, 10); wv.setSpacing(4)
+
+        NODE_COLORS = {"N01": "#5a9fb8", "N02": "#6fb56a", "N03": "#d4a84b"}
+
+        waveforms = event.node_waveforms if event.node_waveforms else {event.node_id: event.waveform}
+        for sid, wfdata in waveforms.items():
+            row_hdr = QHBoxLayout()
+            lbl = QLabel(f"SEISMIC · {sid}"); lbl.setProperty("role", "monoMute")
+            marker = "▶" if sid == event.node_id else " "
+            tag_lbl = QLabel(f"{marker} NEAREST" if sid == event.node_id else "")
+            tag_lbl.setProperty("role", "monoMute")
+            tag_lbl.setStyleSheet(f"color: {NODE_COLORS.get(sid, '#8b96a1')};")
+            row_hdr.addWidget(lbl); row_hdr.addWidget(tag_lbl); row_hdr.addStretch(1)
+            wv.addLayout(row_hdr)
+            wf = WaveformMini(wfdata, color=NODE_COLORS.get(sid, "#d4a84b"))
+            wf.setFixedHeight(80)
+            wv.addWidget(wf)
+
         ml.addWidget(wf_wrap)
 
         if event.notes:

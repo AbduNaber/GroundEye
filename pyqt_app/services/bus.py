@@ -18,12 +18,18 @@ class Bus(QObject):
     mqtt_event_received = pyqtSignal(dict)    # groundeye/event payload
     mqtt_connected = pyqtSignal(str, int)     # host, port
     mqtt_disconnected = pyqtSignal()
-    stream_received = pyqtSignal(str, object) # mqtt_node_id, np.ndarray float32 -1..1
+    stream_received      = pyqtSignal(str, object) # mqtt_node_id, np.ndarray float32 -1..1
+    stream_meta_received = pyqtSignal(str, object)  # mqtt_node_id, epoch_ms int (64-bit)
 
     # Recorder / player signals
     recording_started = pyqtSignal(str)       # filepath
     recording_stopped = pyqtSignal(str, int)  # filepath, count
     playback_reset = pyqtSignal()             # clear transient state before replay
+
+    # Camera signals
+    camera_discovered = pyqtSignal(dict)      # {"node_id":..., "ip":..., "port":..., "online":...}
+    camera_frame = pyqtSignal(str, bytes)     # node_id, jpeg_bytes
+    event_photo_saved = pyqtSignal(str, str)  # event_id, absolute filepath
 
 
 bus = Bus()

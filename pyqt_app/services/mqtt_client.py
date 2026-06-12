@@ -20,7 +20,7 @@ from pyqt_app.services import settings as cfg
 
 logger = logging.getLogger(__name__)
 
-TOPICS = ["groundeye/location", "groundeye/status", "groundeye/event"]
+TOPICS = ["groundeye/location", "groundeye/status", "groundeye/event", "groundeye/camera"]
 STREAM_TOPIC_PREFIX = "groundeye/stream/"  # binary int16 batches from ESP
 HEARTBEAT_TIMEOUT = 30.0  # seconds before node → offline
 RMS_MAX = 300.0            # normalise rms_energy to 0..1
@@ -51,9 +51,11 @@ class MqttBridge(QObject):
     _sig_location = pyqtSignal(dict)
     _sig_status = pyqtSignal(dict)
     _sig_event = pyqtSignal(dict)
+    _sig_camera = pyqtSignal(dict)
     _sig_connected = pyqtSignal(str, int)
     _sig_disconnected = pyqtSignal()
-    _sig_stream = pyqtSignal(str, object)  # mqtt_node_id, np.ndarray
+    _sig_stream      = pyqtSignal(str, object)  # mqtt_node_id, np.ndarray
+    _sig_stream_meta = pyqtSignal(str, object)  # mqtt_node_id, epoch_ms (64-bit int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,9 +68,11 @@ class MqttBridge(QObject):
         self._sig_location.connect(bus.location_received)
         self._sig_status.connect(bus.status_received)
         self._sig_event.connect(bus.mqtt_event_received)
+        self._sig_camera.connect(bus.camera_discovered)
         self._sig_connected.connect(bus.mqtt_connected)
         self._sig_disconnected.connect(bus.mqtt_disconnected)
         self._sig_stream.connect(bus.stream_received)
+        self._sig_stream_meta.connect(bus.stream_meta_received)
 
     # ------------------------------------------------------------------
     # Public API
@@ -133,6 +137,7 @@ class MqttBridge(QObject):
         for topic in TOPICS:
             client.subscribe(topic)
         client.subscribe(STREAM_TOPIC_PREFIX + "+")
+        client.subscribe("groundeye/stream_meta/+")
         self._sig_connected.emit(self._host, self._port)
 
     def _on_disconnect(self, client, userdata, *args):
@@ -146,9 +151,26 @@ class MqttBridge(QObject):
         if topic.startswith(STREAM_TOPIC_PREFIX):
             node_id = topic[len(STREAM_TOPIC_PREFIX):]
             try:
-                samples = np.frombuffer(message.payload, dtype=np.int16).astype(np.float32) / 32768.0
+                # Divide by sensor practical peak (~3000 int16 units) so displayed
+                # values fill the -1..1 range; clip for rare over-range spikes
+                samples = np.frombuffer(message.payload, dtype=np.int16).astype(np.float32) / 3000.0
+                samples = np.clip(samples, -1.0, 1.0)
                 if samples.size:
                     self._sig_stream.emit(node_id, samples)
+            except Exception:
+                pass
+            return
+
+        # stream_meta — JSON with ESP32 NTP epoch for the upcoming batch
+        if topic.startswith("groundeye/stream_meta/"):
+            node_id = topic[len("groundeye/stream_meta/"):]
+            try:
+                meta = json.loads(message.payload.decode())
+                lo = meta.get("epoch_ms", 0)
+                hi = meta.get("epoch_ms_high", 0)
+                epoch_ms = int((hi << 32) | lo)
+                if epoch_ms > 0:
+                    self._sig_stream_meta.emit(node_id, epoch_ms)
             except Exception:
                 pass
             return
@@ -163,6 +185,8 @@ class MqttBridge(QObject):
             self._sig_status.emit(payload)
         elif topic == "groundeye/event":
             self._sig_event.emit(payload)
+        elif topic == "groundeye/camera":
+            self._sig_camera.emit(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +200,12 @@ class MqttHandler(QObject):
         super().__init__()
         # last heartbeat timestamp per mqtt node_id
         self._heartbeats: dict[str, float] = {}
+        # rolling raw sample buffer per mqtt node_id (float32, -1..1)
+        self._stream_bufs: dict[str, deque] = {}
+        # last ESP32 epoch_ms seen for each node (from stream_meta)
+        self._stream_epoch: dict[str, int] = {}
+        # timed batches: deque of (epoch_ms_start, samples) — last ~6 s per node
+        self._timed_batches: dict[str, deque] = {}
 
         self._hb_timer = QTimer(self)
         self._hb_timer.setInterval(5000)
@@ -184,8 +214,68 @@ class MqttHandler(QObject):
 
         bus.location_received.connect(self._on_location)
         bus.status_received.connect(self._on_status)
+        bus.stream_received.connect(self._on_stream)
+        bus.stream_meta_received.connect(self._on_stream_meta)
         bus.mqtt_disconnected.connect(self._on_disconnected)
         bus.mqtt_connected.connect(self._on_connected_toast)
+
+    # ------------------------------------------------------------------
+    # Raw stream buffer — keeps last 4000 samples per node
+    # ------------------------------------------------------------------
+
+    def _on_stream_meta(self, mqtt_id: str, epoch_ms) -> None:
+        self._stream_epoch[mqtt_id] = int(epoch_ms)
+
+    def _on_stream(self, mqtt_id: str, samples) -> None:
+        # Simple rolling buffer (live display)
+        buf = self._stream_bufs.get(mqtt_id)
+        if buf is None:
+            buf = deque(maxlen=4000)
+            self._stream_bufs[mqtt_id] = buf
+        buf.extend(samples.tolist())
+
+        # Timed batch (event waveform capture) — maxlen=150 ≈ 6 s at ~25 batches/s
+        epoch_ms = self._stream_epoch.get(mqtt_id, 0)
+        if epoch_ms > 0:
+            timed = self._timed_batches.get(mqtt_id)
+            if timed is None:
+                timed = deque(maxlen=150)
+                self._timed_batches[mqtt_id] = timed
+            timed.append((epoch_ms, samples.copy()))
+
+    def _capture_waveform(self, mqtt_id: str, event_ts_ms: int = 0, n: int = 240) -> list:
+        """Slice timed batch buffer around event_ts_ms, downsample to n points.
+        Values are already scaled by /3000 in the bridge — no extra normalisation."""
+        import numpy as np
+        from pyqt_app.models.event import make_waveform
+
+        FS = 2000
+        HALF_WIN_MS = 1000  # ±1 s window around the event
+
+        timed = self._timed_batches.get(mqtt_id)
+        if timed and event_ts_ms > 0:
+            t0 = event_ts_ms - HALF_WIN_MS
+            t1 = event_ts_ms + HALF_WIN_MS
+            segments = []
+            for (batch_start, batch_samples) in timed:
+                batch_end = batch_start + len(batch_samples) * 1000 / FS
+                if batch_end >= t0 and batch_start <= t1:
+                    segments.append((batch_start, batch_samples))
+            if segments:
+                segments.sort(key=lambda x: x[0])
+                arr = np.concatenate([s for _, s in segments])
+                if len(arr) >= n // 4:
+                    idx = np.linspace(0, len(arr) - 1, n, dtype=int)
+                    return arr[idx].tolist()
+
+        # Fallback: latest buffer, raw scale
+        buf = self._stream_bufs.get(mqtt_id)
+        if buf and len(buf) >= n // 4:
+            arr = np.array(buf, dtype=np.float32)
+            idx = np.linspace(0, len(arr) - 1, n, dtype=int)
+            return arr[idx].tolist()
+
+        return make_waveform(n, 0.5, 40)
 
     # ------------------------------------------------------------------
     # groundeye/location
@@ -219,6 +309,14 @@ class MqttHandler(QObject):
         ts_str = ts_dt.strftime("%H:%M:%S.") + f"{ts_dt.microsecond // 1000:03d}"
         date_str = ts_dt.strftime("%Y-%m-%d")
 
+        # Capture waveform for every participating node
+        node_waveforms = {}
+        for node_info in payload.get("nodes", []):
+            mid = node_info.get("node_id", "")
+            sid = _mqtt_to_store_id(mid)
+            if sid:
+                node_waveforms[sid] = self._capture_waveform(mid, event_ts_ms=ts_ms)
+
         ev = Event(
             id=f"LIVE-{_live_counter:04d}",
             ts=ts_str,
@@ -229,7 +327,8 @@ class MqttHandler(QObject):
             duration=0.0,
             distance=payload.get("est_dist_m", 0.0),
             tag=best_method,
-            waveform=make_waveform(120, confidence, 40),
+            waveform=node_waveforms.get(nid or "N01", self._capture_waveform(nearest, event_ts_ms=ts_ms)),
+            node_waveforms=node_waveforms,
         )
         store.add_event(ev)
         bus.event_received.emit(ev)

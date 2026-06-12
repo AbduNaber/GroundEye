@@ -1,0 +1,11 @@
+{
+  "field": {
+    "width_m": 0.8,
+    "height_m": 0.6928
+  },
+  "nodes": [
+    {"id": "node-1", "store_id": "N01", "x_m": 0.0,  "y_m": 0.0},
+    {"id": "node-2", "store_id": "N02", "x_m": 0.8,  "y_m": 0.0},
+    {"id": "node-3", "store_id": "N03", "x_m": 0.4,  "y_m": 0.6928}
+  ]
+}

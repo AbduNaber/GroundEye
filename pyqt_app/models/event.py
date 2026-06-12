@@ -17,7 +17,9 @@ class Event:
     night: bool = False
     tag: str = ""          # subject-N | wildlife | empty
     waveform: List[float] = field(default_factory=list)
+    node_waveforms: dict = field(default_factory=dict)  # store_id → List[float]
     notes: str = ""
+    photo_path: str = ""   # absolute path to saved JPEG snapshot, empty = placeholder
 
 
 def make_waveform(samples: int = 240, peak: float = 0.8, peak_at_pct: int = 42) -> List[float]:

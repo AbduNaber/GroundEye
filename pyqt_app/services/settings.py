@@ -7,6 +7,7 @@ _PATH = Path(__file__).parent.parent.parent / "settings.json"
 _DEFAULTS: dict = {
     "broker_host": "100.83.35.127",
     "broker_port": 1883,
+    "snapshot_url": "http://100.83.35.127:8080/cam/snapshot",
 }
 
 
