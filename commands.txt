@@ -1,1 +1,4 @@
  ./groundeye_calibrate --config ../config.json --nodes node-1,node-2,node-3
+./groundeye_dsp --nodes node-2,node-1,node-3 --config config.json
+./groundeye_orch --config config.json
+watch -n 1 'iw dev wlan0 station dump | grep -E "Station|inactive time|tx failed|tx bitrate|rx bitrate|connected time"'
